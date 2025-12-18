@@ -33,13 +33,63 @@ CHIP ALU {
         nx, // negate the x input?
         zy, // zero the y input?
         ny, // negate the y input?
-        f,  // compute (out = x + y) or (out = x & y)?
+        f,  // compute out = x + y (if 1) or x & y (if 0)
         no; // negate the out output?
+
     OUT 
         out[16], // 16-bit output
-        zr,      // if (out == 0) equals 1, else 0
-        ng;      // if (out < 0)  equals 1, else 0
+        zr, // 1 if (out == 0), 0 otherwise
+        ng; // 1 if (out < 0),  0 otherwise
 
     PARTS:
-    //// Replace this comment with your code.
+   // --- 第一階段：處理 X 輸入 (x pre-processing) ---
+   // 如果 zx=1，將 x 設為 0 (使用 false 代表全 0)
+   Mux16(a=x, b=false, sel=zx, out=x1);
+
+   // 如果 nx=1，將 x 反相 (bitwise NOT)
+   // 先算出 !x1，再用 Mux 決定要用原本的還是反相的
+   Not16(in=x1, out=notx1);
+   Mux16(a=x1, b=notx1, sel=nx, out=xFinal);
+
+
+   // --- 第二階段：處理 Y 輸入 (y pre-processing) ---
+   // 邏輯同上
+   Mux16(a=y, b=false, sel=zy, out=y1);
+   Not16(in=y1, out=noty1);
+   Mux16(a=y1, b=noty1, sel=ny, out=yFinal);
+
+
+   // --- 第三階段：計算與功能選擇 (Compute & Select) ---
+   // 同時計算 x+y 和 x&y
+   Add16(a=xFinal, b=yFinal, out=xPlusy);
+   And16(a=xFinal, b=yFinal, out=xAndy);
+
+   // 根據 f 決定輸出哪一個 (f=1 為加法, f=0 為 AND)
+   Mux16(a=xAndy, b=xPlusy, sel=f, out=computedOut);
+
+
+   // --- 第四階段：輸出後處理 (Post-processing) ---
+   // 如果 no=1，將結果反相
+   Not16(in=computedOut, out=notComputedOut);
+   
+   // 這裡是最關鍵的地方！
+   // 我們需要在這裡產生最終輸出，同時為了計算 zr 和 ng，
+   // 我們需要把輸出的線路「分流 (sub-busing)」出來觀察。
+   // out[15] 是最高位，直接對應負數標誌 ng。
+   // out[0..7] 和 out[8..15] 分開接出來是為了之後判斷是否全為 0。
+   Mux16(a=computedOut, b=notComputedOut, sel=no, out=out, out[15]=ng, out[0..7]=low8, out[8..15]=high8);
+
+
+   // --- 第五階段：計算狀態標誌 (Flags) ---
+   
+   // 1. Negative Flag (ng)
+   // 已經在上一步驟透過 out[15]=ng 完成了。
+
+   // 2. Zero Flag (zr)
+   // 如果所有位元都是 0，zr 才是 1。
+   // Hack HDL 沒有 Or16Way，所以我們用兩個 Or8Way 加上一個 Or 來檢查是否有任何位元是 1。
+   Or8Way(in=low8, out=orLow);
+   Or8Way(in=high8, out=orHigh);
+   Or(a=orLow, b=orHigh, out=anyOne); // 如果有任何位元是 1，anyOne 就是 1
+   Not(in=anyOne, out=zr);            // 反之，如果全都是 0，zr 就是 1
 }
